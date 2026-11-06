@@ -16,3 +16,6 @@ saida/
 
 # Contexto interno do projeto
 contexto/
+
+# Configurações locais do Claude Code
+.claude/
