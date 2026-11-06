@@ -1,0 +1,18 @@
+# Ambientes e dependências
+.venv/
+__pypackages__/
+.pdm-python
+__pycache__/
+.pytest_cache/
+
+# Dados sensíveis (documentos, CPFs, e-mails) e saídas geradas
+editais/
+downloads_drive/
+saida/
+*.csv
+*.zip
+.env
+.streamlit/secrets.toml
+
+# Contexto interno do projeto
+contexto/
