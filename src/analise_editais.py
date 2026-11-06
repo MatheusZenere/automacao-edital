@@ -1,4 +1,4 @@
-"""Módulo de análise estruturada de editais e submissões de pesquisa (IFC).
+"""Módulo de análise estruturada de editais e submissões de pesquisa.
 Processa arquivos (PDFs, DOCX, imagens) informados pelo usuário via upload ou diretório,
 classifica documentos, extrai metadados do projeto, analisa o mérito curricular,
 valida a conformidade de documentos obrigatórios/faltantes e exporta via Pandas.

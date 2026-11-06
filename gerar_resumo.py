@@ -19,7 +19,7 @@ def main():
     args = sys.argv[1:]
 
     print("=" * 70)
-    print("Verificador de Submissão de Editais & Projetos (IFC)")
+    print("Verificador de Submissão de Editais & Projetos")
     print("=" * 70)
 
     # Caso 1: Usuário informou um arquivo compactado (.zip)
