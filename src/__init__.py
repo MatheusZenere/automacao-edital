@@ -1,0 +1,1 @@
+"""Análise automatizada de editais."""
