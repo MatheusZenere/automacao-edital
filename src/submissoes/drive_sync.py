@@ -4,7 +4,6 @@ Permite que qualquer professor ou usuário conecte o seu próprio Google Drive a
 2. Upload direto do arquivo ZIP baixado da pasta do Google Drive.
 """
 import io
-import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 import re
@@ -222,11 +221,16 @@ def _listar_pasta(folder_id: str, pasta_destino: Path) -> list[ArquivoDrive]:
     finally:
         sessao.close()
 
+    base = pasta_destino.resolve()
     itens: list[ArquivoDrive] = []
     for arquivo, caminho in _get_directory_structure(gdrive_file=raiz, previous_path=""):
         if arquivo is None:  # subpasta
             continue
-        itens.append(ArquivoDrive(id=arquivo.id, caminho_local=pasta_destino / caminho, tipo=arquivo.type or ""))
+        # Os nomes vêm do Drive (controlados por terceiros): impede "../" e caminhos absolutos
+        destino = (base / caminho).resolve()
+        if not destino.is_relative_to(base):
+            continue
+        itens.append(ArquivoDrive(id=arquivo.id, caminho_local=destino, tipo=arquivo.type or ""))
     return itens
 
 
