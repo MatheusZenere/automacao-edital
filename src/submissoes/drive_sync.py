@@ -62,17 +62,16 @@ def detectar_raiz_submissoes(pasta: Path) -> Path:
     if not pasta.exists():
         return pasta
 
-    # Se a própria pasta contém subpastas com arquivos pdf/docx, retorna ela
     subpastas = [d for d in pasta.iterdir() if d.is_dir() and not d.name.startswith(".")]
-    if subpastas:
-        for sub in subpastas:
-            arquivos = list(sub.iterdir())
-            if any(f.suffix.lower() in [".pdf", ".docx"] for f in arquivos if f.is_file()):
-                return pasta
+    arquivos_soltos = [f for f in pasta.iterdir() if f.is_file() and not f.name.startswith(".")]
 
-    # Se a pasta contém apenas 1 subpasta intermediária, desce nela
-    if len(subpastas) == 1:
-        return detectar_raiz_submissoes(subpastas[0])
+    # Desce só por uma pasta "embrulho": nada solto aqui e uma única subpasta que, por sua vez,
+    # tem subpastas. Assim a raiz com o edital solto + PVG.../ é mantida, e uma pasta com um
+    # único projeto (só arquivos dentro) não é confundida com embrulho.
+    if len(subpastas) == 1 and not arquivos_soltos:
+        unica = subpastas[0]
+        if any(d.is_dir() and not d.name.startswith(".") for d in unica.iterdir()):
+            return detectar_raiz_submissoes(unica)
 
     return pasta
 
