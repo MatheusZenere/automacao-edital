@@ -5,17 +5,16 @@ __pypackages__/
 __pycache__/
 .pytest_cache/
 
-# Dados sensíveis (documentos, CPFs, e-mails) e saídas geradas
+# Dados sensíveis e saídas (ficam em ../editais, ../cache, ../saidas; aqui só por segurança)
 editais/
+cache/
 downloads_drive/
 saida/
+saidas/
 *.csv
 *.zip
 .env
 .streamlit/secrets.toml
-
-# Contexto interno do projeto
-contexto/
 
 # Configurações locais do Claude Code
 .claude/
