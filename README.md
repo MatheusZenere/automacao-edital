@@ -29,6 +29,7 @@ Os caminhos podem ser trocados com `BOLSAIF_EDITAIS`, `BOLSAIF_CACHE` e `BOLSAIF
 - `validacao.py`: confere se o trecho citado pela IA existe no edital.
 - `processo.py`: junta os arquivos de um processo e consolida o checklist.
 - `relatorio_edital.py`: gera `checklist.json` e `checklist.md`.
+- `estrutura.py`: sem IA, separa o edital em seções pelo título e extrai cronograma, documentos (anexos) e requisitos. O app procura o PDF do edital na raiz da pasta, ao lado das subpastas dos projetos.
 
 ### `src/submissoes`
 - `analise_editais.py`: classifica documentos, extrai metadados/mérito e confere pendências.

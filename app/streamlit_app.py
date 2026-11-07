@@ -25,6 +25,14 @@ st.set_page_config(
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.config import PASTA_CACHE as PASTA_CACHE_RAIZ
+from src.edital.estrutura import (
+    TEMA_REQUISITOS,
+    TEMA_SUBMISSAO,
+    EditalEstruturado,
+    ItemEdital,
+    analisar_edital,
+    encontrar_edital,
+)
 from src.submissoes.analise_editais import (
     ProjetoEdital,
     analisar_todos_editais,
@@ -60,12 +68,27 @@ def assinatura_pasta(pasta: Path) -> tuple:
     return (len(arqs), sum(f.stat().st_size for f in arqs), max((f.stat().st_mtime_ns for f in arqs), default=0))
 
 # --- FUNÇÃO DE CARREGAMENTO CACHEADA ---
-@st.cache_data(show_spinner="Analisando subpastas de editais e anexos...")
-def carregar_projetos(caminho_pasta: str, _assinatura: tuple) -> list[ProjetoEdital]:
+# `assinatura` entra na chave do cache (sem "_"), então mudanças na pasta refazem a análise.
+@st.cache_data(show_spinner="Analisando subpastas de editais e anexos...", max_entries=20)
+def carregar_projetos(caminho_pasta: str, assinatura: tuple) -> list[ProjetoEdital]:
     p = Path(caminho_pasta)
     if not p.exists() or not p.is_dir():
         return []
     return analisar_todos_editais(p)
+
+
+@st.cache_data(show_spinner="Lendo o edital...", max_entries=20)
+def carregar_edital(caminho_pasta: str, assinatura: tuple) -> EditalEstruturado | None:
+    caminho = encontrar_edital(Path(caminho_pasta))
+    return analisar_edital(caminho) if caminho else None
+
+
+def markdown_item(item: ItemEdital) -> str:
+    """Item do edital em Markdown: número em negrito e incisos/alíneas em linhas próprias."""
+    linhas = [esc(p) for p in item.paragrafos]
+    if item.numero:
+        linhas[0] = f"**{esc(item.numero)}** {linhas[0]}"
+    return "  \n".join(linhas)
 
 
 # --- CABEÇALHO ---
@@ -165,8 +188,15 @@ with col_menu:
 
     todos_projetos: list[ProjetoEdital] = []
     proj_sel: ProjetoEdital | None = None
+    edital: EditalEstruturado | None = None
     if pasta_para_analisar and pasta_para_analisar.exists():
-        todos_projetos = carregar_projetos(str(pasta_para_analisar), assinatura_pasta(pasta_para_analisar))
+        assinatura = assinatura_pasta(pasta_para_analisar)
+        todos_projetos = carregar_projetos(str(pasta_para_analisar), assinatura)
+        edital = carregar_edital(str(pasta_para_analisar), assinatura)
+        if edital:
+            st.caption(f":material/gavel: Edital {esc(edital.numero or edital.arquivo)} encontrado na pasta.")
+        else:
+            st.caption(":material/warning: Nenhum PDF de edital na raiz da pasta.")
 
     if todos_projetos:
         with st.container(border=True):
@@ -215,6 +245,106 @@ with col_main:
                     "**Arquivo ZIP**  \nClique com o botão direito na pasta > **Fazer download** e envie "
                     "o arquivo `.zip` gerado no painel."
                 )
+        st.stop()
+
+    visao = st.segmented_control(
+        "Visão",
+        [":material/folder_shared: Submissões", ":material/gavel: Edital"],
+        default=":material/folder_shared: Submissões",
+        key="visao",
+        label_visibility="collapsed",
+    ) or ":material/folder_shared: Submissões"
+
+    if visao.endswith("Edital"):
+        if edital is None:
+            st.info(
+                "Coloque o PDF do edital na raiz da pasta, ao lado das subpastas dos projetos, e carregue a pasta novamente.",
+                title="Nenhum edital encontrado",
+                icon=":material/gavel:",
+            )
+            st.stop()
+
+        st.subheader(f"Edital nº {esc(edital.numero)}" if edital.numero else esc(edital.arquivo))
+        if edital.titulo:
+            st.markdown(f"**{esc(edital.titulo)}**")
+        detalhes = [edital.unidade, f"publicado em {edital.data_publicacao}" if edital.data_publicacao else "",
+                    f"{edital.paginas} páginas", edital.contato]
+        st.caption(" · ".join(esc(d) for d in detalhes if d))
+
+        if edital.escaneado:
+            st.warning(
+                "Este PDF parece ser uma imagem escaneada: sem texto, não há como extrair as informações automaticamente.",
+                title="PDF escaneado",
+            )
+            st.stop()
+        if not edital.secoes:
+            st.warning(
+                "Não reconhecemos as seções deste edital (títulos como \"3 DO CRONOGRAMA\").",
+                title="Estrutura não reconhecida",
+            )
+            st.stop()
+
+        if edital.prazo_submissao:
+            st.info(esc(edital.prazo_submissao), title="Período de submissão", icon=":material/event:")
+
+        aba_crono, aba_docs, aba_sub, aba_req, aba_tudo = st.tabs([
+            ":material/calendar_month: Cronograma",
+            ":material/description: Documentos",
+            ":material/send: Como submeter",
+            ":material/rule: Requisitos",
+            ":material/menu_book: Edital completo",
+        ])
+        with aba_crono:
+            if edital.cronograma:
+                st.dataframe(
+                    pd.DataFrame([{"Atividade": c.atividade, "Data": c.data} for c in edital.cronograma]),
+                    hide_index=True,
+                    alt="Cronograma do edital",
+                )
+            else:
+                st.info("O cronograma não foi encontrado em formato de tabela. Veja a aba Edital completo.")
+        with aba_docs:
+            if edital.documentos:
+                st.caption("Documentos citados no edital como anexos, por exemplo \"Projeto de Pesquisa (ANEXO I)\".")
+                st.dataframe(
+                    pd.DataFrame([
+                        {
+                            "Anexo": d.anexo,
+                            "Documento": d.descricao,
+                            "Etapa": "Submissão" if d.na_submissao else "Outras etapas",
+                            "Citado nos itens": ", ".join(d.itens),
+                        }
+                        for d in edital.documentos
+                    ]),
+                    hide_index=True,
+                    alt="Documentos citados no edital",
+                )
+            else:
+                st.info("Nenhum anexo citado no formato \"(ANEXO I)\" foi encontrado.")
+        with aba_sub:
+            secoes_sub = edital.secoes_do_tema(TEMA_SUBMISSAO)
+            if not secoes_sub:
+                st.info("Nenhuma seção sobre submissão ou inscrição foi encontrada.")
+            for secao in secoes_sub:
+                st.markdown(f"##### {secao.numero} {esc(secao.titulo)}")
+                for item in secao.itens:
+                    st.markdown(markdown_item(item))
+        with aba_req:
+            secoes_req = edital.secoes_do_tema(TEMA_REQUISITOS)
+            if not secoes_req:
+                st.info("Nenhuma seção de requisitos foi encontrada.")
+            for secao in secoes_req:
+                st.markdown(f"##### {secao.numero} {esc(secao.titulo)}")
+                for item in secao.itens:
+                    resumo = item.paragrafos[0] if item.paragrafos else ""
+                    resumo = resumo if len(resumo) <= 90 else resumo[:90] + "…"
+                    with st.expander(f"{esc(item.numero)} {esc(resumo)}".strip()):
+                        st.markdown(markdown_item(item))
+        with aba_tudo:
+            for secao in edital.secoes:
+                with st.expander(f"{secao.numero} {esc(secao.titulo)}"):
+                    for item in secao.itens:
+                        st.markdown(markdown_item(item))
         st.stop()
 
     if not todos_projetos:

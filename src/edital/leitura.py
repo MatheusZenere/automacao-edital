@@ -7,16 +7,21 @@ MIN_CHARS_POR_PAGINA = 100
 EXTENSOES_SUPORTADAS = {".pdf", ".docx", ".odt"}
 
 
-def ler_pdf(caminho: Path) -> tuple[str, bool]:
-    """Retorna (texto, escaneado)."""
+def ler_paginas_pdf(caminho: Path) -> tuple[list[str], bool]:
+    """Retorna (texto de cada página, escaneado)."""
     import pymupdf
 
     with pymupdf.open(caminho) as doc:
         paginas = [p.get_text() for p in doc]
-    texto = "\n".join(paginas)
-    n = max(len(paginas), 1)
-    escaneado = len(texto.strip()) / n < MIN_CHARS_POR_PAGINA
-    return texto, escaneado
+    total = sum(len(p.strip()) for p in paginas)
+    escaneado = total / max(len(paginas), 1) < MIN_CHARS_POR_PAGINA
+    return paginas, escaneado
+
+
+def ler_pdf(caminho: Path) -> tuple[str, bool]:
+    """Retorna (texto, escaneado)."""
+    paginas, escaneado = ler_paginas_pdf(caminho)
+    return "\n".join(paginas), escaneado
 
 
 def ler_docx(caminho: Path) -> str:

@@ -8,6 +8,7 @@ REPO_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_DIR))
 
 from src.config import PASTA_CACHE, PASTA_SAIDAS
+from src.edital.estrutura import analisar_edital, encontrar_edital
 from src.submissoes.analise_editais import analisar_todos_editais, gerar_dataframes
 from src.submissoes.drive_sync import ErroDrivePersonalizado, extrair_zip_submissoes
 from src.submissoes.exportacao import csv_seguro
@@ -17,6 +18,15 @@ EXTENSOES_COMPACTADAS = (".zip", ".tar.gz", ".tar", ".tgz")
 
 def resumir(pasta_alvo: Path) -> None:
     """Analisa as subpastas, imprime o status de cada submissão e exporta o resumo em CSV."""
+    caminho_edital = encontrar_edital(pasta_alvo)
+    if caminho_edital:
+        edital = analisar_edital(caminho_edital)
+        print(f"[EDITAL] Nº {edital.numero or '?'} ({caminho_edital.name})")
+        if edital.prazo_submissao:
+            print(f"         Submissão: {edital.prazo_submissao}")
+    else:
+        print("[EDITAL] Nenhum PDF de edital na raiz da pasta.")
+
     projetos = analisar_todos_editais(pasta_alvo)
     if not projetos:
         print("[AVISO] Nenhuma subpasta de edital encontrada no diretório informado.")
