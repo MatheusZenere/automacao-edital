@@ -3,9 +3,8 @@ Processa arquivos (PDFs, DOCX, imagens) informados pelo usuário via upload ou d
 classifica documentos, extrai metadados do projeto, analisa o mérito curricular,
 valida a conformidade de documentos obrigatórios/faltantes e exporta via Pandas.
 """
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 import io
-import os
 from pathlib import Path
 import re
 from typing import Any
@@ -80,6 +79,15 @@ class ProjetoEdital:
     cronograma: list[dict[str, Any]] = field(default_factory=list)
     criterios_merito: list[CriterioMerito] = field(default_factory=list)
     arquivos: list[ArquivoProcessadoInfo] = field(default_factory=list)
+
+
+def _texto_pdf(doc: pymupdf.Document) -> str:
+    return "\n".join(p.get_text() for p in doc)
+
+
+def _compactar(m: re.Match | None) -> str:
+    """Primeiro grupo da busca com espaços/quebras normalizados ('' se não houve correspondência)."""
+    return " ".join(m.group(1).split()) if m else ""
 
 
 def mascarar_cpf(cpf: str) -> str:
@@ -159,7 +167,7 @@ def extrair_criterios_anexo_ii_stream(nome: str, conteudo: bytes) -> tuple[float
     if ext == ".pdf":
         try:
             doc = pymupdf.open(stream=conteudo, filetype="pdf")
-            texto = "\n".join(p.get_text() for p in doc)
+            texto = _texto_pdf(doc)
 
             m_tot = re.search(r"TOTAL\s*[:\|]?\s*(\d+[\.,]?\d*)", texto, re.I)
             if m_tot:
@@ -206,7 +214,7 @@ def extrair_criterios_anexo_ii_stream(nome: str, conteudo: bytes) -> tuple[float
 
 def extrair_metadados_sigaa(doc: pymupdf.Document, identificador_padrao: str = "") -> dict[str, Any]:
     """Extrai informações cadastrais detalhadas do formulário SIGAA."""
-    texto = "\n".join(p.get_text() for p in doc)
+    texto = _texto_pdf(doc)
 
     # Código
     m_cod = re.search(r"Código:\s*([A-Z0-9\-]+)", texto, re.I)
@@ -220,19 +228,17 @@ def extrair_metadados_sigaa(doc: pymupdf.Document, identificador_padrao: str = "
         texto,
         re.S | re.I,
     )
-    titulo = " ".join(m_tit.group(1).split()) if m_tit else ""
+    titulo = _compactar(m_tit)
     if not titulo:
-        m_tit2 = re.search(r"Título:\s*(.*?)(?=\n(?:Resumo|Introdução|\d+\.))", texto, re.S | re.I)
-        if m_tit2:
-            titulo = " ".join(m_tit2.group(1).split())
+        titulo = _compactar(re.search(r"Título:\s*(.*?)(?=\n(?:Resumo|Introdução|\d+\.))", texto, re.S | re.I))
 
     # Edital
     m_edital = re.search(r"Edital:\s*(.*?)(?=\n(?:Cota|Objetivos|Área))", texto, re.S | re.I)
-    edital = " ".join(m_edital.group(1).split()) if m_edital else "Não especificado"
+    edital = _compactar(m_edital) or "Não especificado"
 
     # Cota / Vigência
     m_cota = re.search(r"Cota:\s*(.*?)(?=\n(?:Objetivos|Área|Grande Área))", texto, re.S | re.I)
-    cota = " ".join(m_cota.group(1).split()) if m_cota else ""
+    cota = _compactar(m_cota)
 
     # Área de conhecimento
     m_garea = re.search(r"Grande Área:\s*(.*?)(?=\n(?:Área:|Subárea:))", texto, re.I)
@@ -258,28 +264,28 @@ def extrair_metadados_sigaa(doc: pymupdf.Document, identificador_padrao: str = "
 
     # Seções de texto
     m_res = re.search(r"Resumo\s*(.*?)(?=\n(?:Palavras-chave|Introdução))", texto, re.S | re.I)
-    resumo = " ".join(m_res.group(1).split()) if m_res else ""
+    resumo = _compactar(m_res)
 
     m_intro = re.search(
         r"Introdução.*?\n(.*?)(?=\n(?:Procedimentos Metodológicos|Metodologia|Resultados))",
         texto,
         re.S | re.I,
     )
-    introducao = " ".join(m_intro.group(1).split()) if m_intro else ""
+    introducao = _compactar(m_intro)
 
     m_metod = re.search(
         r"(?:Procedimentos Metodológicos|Metodologia).*?\n(.*?)(?=\n(?:Resultados Esperados|Referências|Cronograma))",
         texto,
         re.S | re.I,
     )
-    metodologia = " ".join(m_metod.group(1).split()) if m_metod else ""
+    metodologia = _compactar(m_metod)
 
     m_result = re.search(
         r"Resultados Esperados.*?\n(.*?)(?=\n(?:Referências|Membros do Projeto|Cronograma))",
         texto,
         re.S | re.I,
     )
-    resultados = " ".join(m_result.group(1).split()) if m_result else ""
+    resultados = _compactar(m_result)
 
     # Membros da equipe
     membros: list[MembroProjeto] = []

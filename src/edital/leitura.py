@@ -9,9 +9,9 @@ EXTENSOES_SUPORTADAS = {".pdf", ".docx", ".odt"}
 
 def ler_pdf(caminho: Path) -> tuple[str, bool]:
     """Retorna (texto, escaneado)."""
-    import fitz  # PyMuPDF
+    import pymupdf
 
-    with fitz.open(caminho) as doc:
+    with pymupdf.open(caminho) as doc:
         paginas = [p.get_text() for p in doc]
     texto = "\n".join(paginas)
     n = max(len(paginas), 1)

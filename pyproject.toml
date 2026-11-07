@@ -9,13 +9,16 @@ dependencies = [
     "python-docx>=1.1",
     "odfpy>=1.4",
     "google-genai>=1.0",
-    "pytest>=8.0",
     "pandas>=2.0",
     "streamlit>=1.30",
     "gdown>=5.0",
+    "requests>=2.31",
 ]
 
 [tool.pdm.scripts]
-resumo = "python gerar_resumo.py"
-app = "streamlit run app_streamlit.py"
-test = "pytest tests/test_analise_editais.py"
+resumo = "python scripts/gerar_resumo.py"
+app = "streamlit run app/streamlit_app.py"
+test = "pytest tests"
+
+[dependency-groups]
+dev = ["pytest>=8.0"]

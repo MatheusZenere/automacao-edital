@@ -21,24 +21,22 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# Caminho base do projeto
-BASE_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(BASE_DIR))
+# O script fica em app/: adiciona a raiz do repositório ao path para importar `src`
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.analise_editais import (
+from src.config import PASTA_CACHE as PASTA_CACHE_RAIZ
+from src.submissoes.analise_editais import (
     ProjetoEdital,
     analisar_todos_editais,
     gerar_dataframe_submissao,
     gerar_dataframes,
 )
-from src.drive_sync import (
+from src.submissoes.drive_sync import (
     ErroDrivePersonalizado,
     baixar_pasta_drive_compartilhada,
-    detectar_raiz_submissoes,
     extrair_zip_submissoes,
 )
-
-PASTA_CACHE_RAIZ = BASE_DIR / "downloads_drive"
+from src.submissoes.exportacao import csv_seguro
 
 # Cada sessão (aba do navegador) usa a sua própria pasta: usuários diferentes não se misturam.
 if "sid" not in st.session_state:
@@ -54,15 +52,6 @@ PASTA_CACHE_DOWNLOADS = PASTA_CACHE_RAIZ / st.session_state["sid"]
 def esc(valor) -> str:
     """Escapa markdown/HTML de textos vindos dos documentos (evita imagens/links injetados)."""
     return re.sub(r"([\\`*_{}\[\]()#+!<>|~$:&-])", r"\\\1", str(valor or ""))
-
-
-def csv_seguro(df: pd.DataFrame) -> bytes:
-    """CSV sem risco de injeção de fórmulas (=, +, -, @) ao abrir no Excel/Planilhas."""
-    def _limpa(v):
-        if isinstance(v, str) and v[:1] in ("=", "+", "-", "@", "\t", "\r"):
-            return "'" + v
-        return v
-    return df.map(_limpa).to_csv(index=False).encode("utf-8-sig")
 
 
 def assinatura_pasta(pasta: Path) -> tuple:
@@ -243,7 +232,8 @@ with col_main:
     if proj_sel is None:
         st.stop()
 
-    st.caption(f":material/folder: Pasta ativa: `{pasta_para_analisar.name.replace(chr(96), "")}` · {len(todos_projetos)} submissão(ões)")
+    nome_pasta = pasta_para_analisar.name.replace("`", "")
+    st.caption(f":material/folder: Pasta ativa: `{nome_pasta}` · {len(todos_projetos)} submissão(ões)")
 
     # Gera DataFrames para exportação
     dfs_sel = gerar_dataframe_submissao(proj_sel)
@@ -402,8 +392,9 @@ with col_main:
     with tab_merito:
         st.markdown("#### :material/military_tech: Formulário de Pontuação de Mérito Curricular (Anexo II)")
         if proj_sel.tem_anexo_merito:
+            nome_anexo = str(proj_sel.anexo_ii_nome).replace("`", "")
             st.success(
-                f"Arquivo identificado: **`{str(proj_sel.anexo_ii_nome).replace(chr(96), "")}`** | Pontuação Total Declarada: **{proj_sel.pontuacao_merito} pontos**",
+                f"Arquivo identificado: **`{nome_anexo}`** | Pontuação Total Declarada: **{proj_sel.pontuacao_merito} pontos**",
                 icon=":material/task_alt:",
             )
             if not df_merito.empty:

@@ -1,9 +1,8 @@
 """Testes unitários para o módulo de análise de editais e submissões."""
-from pathlib import Path
 import pytest
-import pandas as pd
 
-from src.analise_editais import (
+from src.config import PASTA_EDITAIS as PASTA_EDITAIS_RAIZ
+from src.submissoes.analise_editais import (
     analisar_arquivos_submissao,
     analisar_pasta_pvg,
     extrair_criterios_anexo_ii_stream,
@@ -11,12 +10,11 @@ from src.analise_editais import (
     mascarar_cpf,
 )
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-PASTA_EDITAIS = BASE_DIR / "editais" / "ProjetosPesquisaAutomacao"
+PASTA_EDITAIS = PASTA_EDITAIS_RAIZ / "ProjetosPesquisaAutomacao"
 
 # Os documentos reais não são versionados (dados pessoais): sem eles, esses testes são pulados.
 requer_editais = pytest.mark.skipif(
-    not PASTA_EDITAIS.exists(), reason="documentos de exemplo ausentes (pasta editais/ não versionada)"
+    not PASTA_EDITAIS.exists(), reason="documentos de exemplo ausentes (pasta editais/ fora do repositório)"
 )
 
 
@@ -98,11 +96,11 @@ def test_gerar_dataframe_submissao():
     assert "Pontuação Mérito Curricular" in df_det.columns
 
 
-def test_rejeitar_arquivo_nao_compactado():
-    from src.drive_sync import ErroDrivePersonalizado, extrair_zip_submissoes
+def test_rejeitar_arquivo_nao_compactado(tmp_path):
+    from src.submissoes.drive_sync import ErroDrivePersonalizado, extrair_zip_submissoes
 
     dados_falsos = b"%PDF-1.4 conteudo de um pdf solto"
-    pasta_tmp = BASE_DIR / "downloads_drive" / "teste_tmp"
+    pasta_tmp = tmp_path / "teste_tmp"
 
     with pytest.raises(ErroDrivePersonalizado) as excinfo:
         extrair_zip_submissoes(dados_falsos, pasta_tmp, nome_arquivo="documento.pdf")
