@@ -31,6 +31,10 @@ Os caminhos podem ser trocados com `BOLSAIF_EDITAIS`, `BOLSAIF_CACHE` e `BOLSAIF
 - `relatorio_edital.py`: gera `checklist.json` e `checklist.md`.
 - `estrutura.py`: sem IA, separa o edital em seções pelo título e extrai cronograma, documentos (anexos) e requisitos. O app procura o PDF do edital na raiz da pasta, ao lado das subpastas dos projetos.
 
+### `src/conformidade.py`
+- Cruza o edital com cada submissão, sem IA: os anexos exigidos na submissão (ex.: Anexo II, Formulário de Pontuação do Lattes) são ligados às categorias de arquivo pela descrição, não pelo número. Cada item fica como entregue, faltando ou para verificar manualmente.
+- Sem o PDF do edital na raiz da pasta, o app mostra um aviso e exibe as submissões sem essa conferência.
+
 ### `src/submissoes`
 - `analise_editais.py`: classifica documentos, extrai metadados/mérito e confere pendências.
 - `drive_sync.py`: download de pasta do Drive e extração segura de ZIP.

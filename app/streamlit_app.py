@@ -25,6 +25,15 @@ st.set_page_config(
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.config import PASTA_CACHE as PASTA_CACHE_RAIZ
+from src.conformidade import (
+    ENTREGUE,
+    FALTANDO,
+    ItemConformidade,
+    exigencias_da_submissao,
+    pendencias,
+    tabela_conformidade,
+    verificar_submissao,
+)
 from src.edital.estrutura import (
     TEMA_REQUISITOS,
     TEMA_SUBMISSAO,
@@ -189,6 +198,7 @@ with col_menu:
     todos_projetos: list[ProjetoEdital] = []
     proj_sel: ProjetoEdital | None = None
     edital: EditalEstruturado | None = None
+    conformidade: dict[str, list[ItemConformidade]] = {}
     if pasta_para_analisar and pasta_para_analisar.exists():
         assinatura = assinatura_pasta(pasta_para_analisar)
         todos_projetos = carregar_projetos(str(pasta_para_analisar), assinatura)
@@ -197,6 +207,10 @@ with col_menu:
             st.caption(f":material/gavel: Edital {esc(edital.numero or edital.arquivo)} encontrado na pasta.")
         else:
             st.caption(":material/warning: Nenhum PDF de edital na raiz da pasta.")
+    # Só há conferência de documentos quando o edital lista os anexos exigidos na submissão
+    tem_exigencias = bool(exigencias_da_submissao(edital))
+    if tem_exigencias:
+        conformidade = {p.codigo: verificar_submissao(edital, p.arquivos) for p in todos_projetos}
 
     if todos_projetos:
         with st.container(border=True):
@@ -213,7 +227,12 @@ with col_menu:
 
                 def _rotulo(codigo: str) -> str:
                     p = por_codigo[codigo]
-                    icone = ":green[:material/check_circle:]" if not p.documentos_faltantes else ":red[:material/error:]"
+                    if not tem_exigencias:
+                        icone = ":material/folder:"
+                    elif pendencias(conformidade[codigo]):
+                        icone = ":red[:material/error:]"
+                    else:
+                        icone = ":green[:material/check_circle:]"
                     titulo = esc(p.titulo if len(p.titulo) <= 42 else p.titulo[:42] + "…")
                     return f"{icone} **{esc(p.codigo)}** · {titulo}"
 
@@ -374,19 +393,55 @@ with col_main:
 
     st.markdown("---")
 
-    # --- DIAGNÓSTICO DE CONFORMIDADE E DOCUMENTOS FALTANTES ---
-    if not proj_sel.documentos_faltantes:
-        st.success(
-            f"**Tudo Certo! Documentação Completa** — Foram analisados **{proj_sel.total_arquivos} arquivo(s)** nesta pasta e todos os documentos obrigatórios exigidos pelo edital estão presentes.",
-            icon=":material/verified:",
+    # --- CONFERÊNCIA COM O EDITAL ---
+    itens_conf = conformidade.get(proj_sel.codigo, [])
+    faltando = pendencias(itens_conf)
+    if edital is None:
+        st.warning(
+            "Coloque o PDF do edital na raiz da pasta, ao lado das subpastas dos projetos, e carregue a pasta "
+            "novamente. Sem ele, as submissões são mostradas sem a conferência dos documentos exigidos.",
+            title="Falta o arquivo do edital",
+            icon=":material/gavel:",
+        )
+    elif not tem_exigencias:
+        st.warning(
+            "O edital foi encontrado, mas não reconhecemos os anexos exigidos na submissão "
+            "(citados como \"Documento (ANEXO I)\" na seção de submissão). "
+            "As submissões são mostradas sem a conferência dos documentos.",
+            title="Exigências do edital não reconhecidas",
+            icon=":material/gavel:",
         )
     else:
-        st.error(
-            f"**Atenção: Submissão Incompleta! Faltam {len(proj_sel.documentos_faltantes)} documento(s) obrigatório(s):**",
-            icon=":material/warning:",
-        )
-        for doc in proj_sel.documentos_faltantes:
-            st.markdown(f":material/cancel: **{doc}**")
+        with st.expander(
+            f"Visão geral: {sum(1 for i in conformidade.values() if pendencias(i))} de {len(conformidade)} "
+            "submissão(ões) com pendências",
+            icon=":material/fact_check:",
+        ):
+            df_conf = tabela_conformidade(conformidade)
+            st.dataframe(df_conf, hide_index=True, alt="Conferência das submissões com o edital")
+            st.download_button(
+                "Baixar conferência com o edital (CSV)",
+                data=csv_seguro(df_conf),
+                file_name="conferencia_edital.csv",
+                mime="text/csv",
+                icon=":material/download:",
+            )
+        if not faltando:
+            st.success(
+                f"Todos os documentos exigidos na submissão pelo Edital {esc(edital.numero)} foram encontrados "
+                f"({proj_sel.total_arquivos} arquivo(s) na pasta).",
+                title="Documentação completa",
+                icon=":material/verified:",
+            )
+        else:
+            st.error(
+                "\n".join(
+                    f"- :material/cancel: **{esc(i.rotulo)}** (item {esc(', '.join(i.itens_edital))} do edital)"
+                    for i in faltando
+                ),
+                title=f"Faltam {len(faltando)} documento(s) exigido(s) pelo edital",
+                icon=":material/warning:",
+            )
 
     # --- BOTÕES DE DOWNLOAD DO CSV CONSOLIDADO ---
     st.markdown("### :material/download: Download do Relatório Consolidado")
@@ -432,10 +487,11 @@ with col_main:
 
     # --- CARTÃO DE IDENTIFICAÇÃO DO PROJETO ---
     st.subheader(f"{esc(proj_sel.codigo)}: {esc(proj_sel.titulo)}")
-    if proj_sel.documentos_faltantes:
-        st.badge(f"{len(proj_sel.documentos_faltantes)} pendência(s)", icon=":material/error:", color="red")
-    else:
-        st.badge("Documentação completa", icon=":material/check_circle:", color="green")
+    if tem_exigencias:
+        if faltando:
+            st.badge(f"{len(faltando)} pendência(s)", icon=":material/error:", color="red")
+        else:
+            st.badge("Documentação completa", icon=":material/check_circle:", color="green")
 
     col_meta1, col_meta2, col_meta3 = st.columns(3)
     with col_meta1:
@@ -493,30 +549,25 @@ with col_main:
         st.dataframe(df_arquivos, width="stretch", hide_index=True)
 
         st.markdown("#### :material/fact_check: Checklist de Exigências do Edital")
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric(
-            "Projeto SIGAA",
-            "Entregue" if proj_sel.tem_projeto_sigaa else "Faltando",
-            delta="Obrigatório",
-            delta_color="normal" if proj_sel.tem_projeto_sigaa else "inverse",
-        )
-        c2.metric(
-            "Versão Tarjada",
-            "Entregue" if proj_sel.tem_versao_tarja else "Faltando",
-            delta="Avaliação às Cegas",
-            delta_color="normal" if proj_sel.tem_versao_tarja else "inverse",
-        )
-        c3.metric(
-            "Anexo II (Mérito)",
-            "Entregue" if proj_sel.tem_anexo_merito else "Faltando",
-            delta="Pontuação Lattes",
-            delta_color="normal" if proj_sel.tem_anexo_merito else "inverse",
-        )
-        c4.metric(
-            "Comprovantes / Ética",
-            "Anexado" if proj_sel.tem_comprovantes else "Não anexado",
-            delta="Conforme Edital",
-        )
+        if not tem_exigencias:
+            st.info("Sem edital reconhecido na pasta, não há checklist para conferir.", icon=":material/gavel:")
+        else:
+            st.dataframe(
+                pd.DataFrame([
+                    {
+                        "Documento": i.rotulo,
+                        "Situação": i.situacao,
+                        "Item do edital": ", ".join(i.itens_edital),
+                        "Arquivo(s)": ", ".join(i.arquivos),
+                    }
+                    for i in itens_conf
+                ]),
+                width="stretch",
+                hide_index=True,
+                alt="Checklist de documentos exigidos pelo edital",
+            )
+            if any(i.situacao not in (ENTREGUE, FALTANDO) for i in itens_conf):
+                st.caption(":material/person_search: Itens para verificar manualmente: o app não sabe qual arquivo atende esse anexo.")
 
     # 3. ABA MÉRITO CURRICULAR (ANEXO II)
     with tab_merito:
