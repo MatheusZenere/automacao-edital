@@ -3,10 +3,12 @@ Permite que o usuário utilize o seu próprio Google Drive através de:
 1. Link ou ID compartilhado do Google Drive (download e sincronização automática).
 2. Upload direto do arquivo compactado (.zip) baixado da pasta do Google Drive.
 """
+import os
 from pathlib import Path
 import re
 import shutil
 import sys
+import threading
 import time
 import uuid
 
@@ -55,15 +57,45 @@ from src.submissoes.drive_sync import (
 )
 from src.submissoes.exportacao import csv_seguro
 
+RETENCAO_SEGUNDOS = 24 * 3600
+
+
+def _limpar_sessoes_antigas() -> None:
+    """Remove dados de sessões sem uso há mais de 24h para não acumular documentos pessoais no disco."""
+    if PASTA_CACHE_RAIZ.exists():
+        for antiga in PASTA_CACHE_RAIZ.iterdir():
+            if antiga.is_dir() and time.time() - antiga.stat().st_mtime > RETENCAO_SEGUNDOS:
+                shutil.rmtree(antiga, ignore_errors=True)
+
+
+@st.cache_resource
+def _iniciar_limpeza() -> threading.Thread:
+    """Uma única thread por servidor limpa o cache a cada hora, mesmo sem novos acessos."""
+
+    def _loop() -> None:
+        while True:
+            _limpar_sessoes_antigas()
+            time.sleep(3600)
+
+    thread = threading.Thread(target=_loop, daemon=True, name="limpeza-cache")
+    thread.start()
+    return thread
+
+
+@st.cache_resource
+def _trava_analise() -> threading.BoundedSemaphore:
+    """Limita as análises simultâneas entre todas as sessões (cada uma pode ocupar muita memória)."""
+    return threading.BoundedSemaphore(2)
+
+
+_iniciar_limpeza()
+
 # Cada sessão (aba do navegador) usa a sua própria pasta: usuários diferentes não se misturam.
 if "sid" not in st.session_state:
     st.session_state["sid"] = uuid.uuid4().hex
-    # Remove dados de sessões antigas (> 24h) para não acumular documentos pessoais no disco
-    if PASTA_CACHE_RAIZ.exists():
-        for _antiga in PASTA_CACHE_RAIZ.iterdir():
-            if _antiga.is_dir() and time.time() - _antiga.stat().st_mtime > 24 * 3600:
-                shutil.rmtree(_antiga, ignore_errors=True)
 PASTA_CACHE_DOWNLOADS = PASTA_CACHE_RAIZ / st.session_state["sid"]
+if PASTA_CACHE_DOWNLOADS.exists():
+    os.utime(PASTA_CACHE_DOWNLOADS)  # marca a sessão como em uso: a limpeza conta 24h sem uso
 
 
 def esc(valor) -> str:
@@ -83,13 +115,17 @@ def carregar_projetos(caminho_pasta: str, assinatura: tuple) -> list[ProjetoEdit
     p = Path(caminho_pasta)
     if not p.exists() or not p.is_dir():
         return []
-    return analisar_todos_editais(p)
+    with _trava_analise():
+        return analisar_todos_editais(p)
 
 
 @st.cache_data(show_spinner="Lendo o edital...", max_entries=20)
 def carregar_edital(caminho_pasta: str, assinatura: tuple) -> EditalEstruturado | None:
     caminho = encontrar_edital(Path(caminho_pasta))
-    return analisar_edital(caminho) if caminho else None
+    if not caminho:
+        return None
+    with _trava_analise():
+        return analisar_edital(caminho)
 
 
 def markdown_item(item: ItemEdital) -> str:
@@ -189,7 +225,8 @@ with col_menu:
                     pasta_para_analisar = p_zip
 
         if st.button("Limpar dados", icon=":material/refresh:", width="stretch"):
-            st.cache_data.clear()
+            # Sem st.cache_data.clear(): o cache é global e apagaria o de todos os usuários.
+            # As entradas desta sessão deixam de ser usadas porque a pasta (parte da chave) some.
             shutil.rmtree(PASTA_CACHE_DOWNLOADS, ignore_errors=True)
             st.session_state.pop("pasta_drive_baixada", None)
             st.session_state.pop("pasta_zip_extraida", None)
@@ -210,7 +247,8 @@ with col_menu:
     # Só há conferência de documentos quando o edital lista os anexos exigidos na submissão
     tem_exigencias = bool(exigencias_da_submissao(edital))
     if tem_exigencias:
-        conformidade = {p.codigo: verificar_submissao(edital, p.arquivos) for p in todos_projetos}
+        # Chave pela pasta, não pelo código lido do PDF: um código forjado não esconde outra submissão
+        conformidade = {p.pasta: verificar_submissao(edital, p.arquivos) for p in todos_projetos}
 
     if todos_projetos:
         with st.container(border=True):
@@ -223,13 +261,13 @@ with col_menu:
                 if not busca or busca in f"{p.codigo} {p.titulo} {p.coordenador or ''}".lower()
             ]
             if filtrados:
-                por_codigo = {p.codigo: p for p in filtrados}
+                por_pasta = {p.pasta: p for p in filtrados}
 
-                def _rotulo(codigo: str) -> str:
-                    p = por_codigo[codigo]
+                def _rotulo(pasta: str) -> str:
+                    p = por_pasta[pasta]
                     if not tem_exigencias:
                         icone = ":material/folder:"
-                    elif pendencias(conformidade[codigo]):
+                    elif pendencias(conformidade[pasta]):
                         icone = ":red[:material/error:]"
                     else:
                         icone = ":green[:material/check_circle:]"
@@ -237,13 +275,13 @@ with col_menu:
                     return f"{icone} **{esc(p.codigo)}** · {titulo}"
 
                 with st.container(height=480, border=False):
-                    codigo_sel = st.radio(
+                    pasta_sel = st.radio(
                         "Submissão",
-                        options=list(por_codigo.keys()),
+                        options=list(por_pasta.keys()),
                         format_func=_rotulo,
                         label_visibility="collapsed",
                     )
-                proj_sel = por_codigo[codigo_sel]
+                proj_sel = por_pasta[pasta_sel]
             else:
                 st.info("Nenhum resultado para a busca.", icon=":material/search_off:")
 
@@ -394,7 +432,7 @@ with col_main:
     st.markdown("---")
 
     # --- CONFERÊNCIA COM O EDITAL ---
-    itens_conf = conformidade.get(proj_sel.codigo, [])
+    itens_conf = conformidade.get(proj_sel.pasta, [])
     faltando = pendencias(itens_conf)
     if edital is None:
         st.warning(
@@ -447,12 +485,15 @@ with col_main:
     st.markdown("### :material/download: Download do Relatório Consolidado")
     col_dl1, col_dl2, col_dl3 = st.columns([2, 1, 1])
 
+    # O código pode vir do nome da pasta (controlado por terceiros): só caracteres seguros no arquivo
+    codigo_arquivo = re.sub(r"[^\w.-]", "_", proj_sel.codigo)
+
     with col_dl1:
         csv_detalhes = csv_seguro(df_detalhes)
         st.download_button(
-            label=f"Baixar Relatório do Projeto ({proj_sel.codigo}) em CSV",
+            label=f"Baixar Relatório do Projeto ({esc(proj_sel.codigo)}) em CSV",
             data=csv_detalhes,
-            file_name=f"relatorio_edital_{proj_sel.codigo}.csv",
+            file_name=f"relatorio_edital_{codigo_arquivo}.csv",
             mime="text/csv",
             icon=":material/download:",
             width="stretch",
@@ -464,7 +505,7 @@ with col_main:
             st.download_button(
                 label="Baixar Mérito Curricular (CSV)",
                 data=csv_merito,
-                file_name=f"merito_curricular_{proj_sel.codigo}.csv",
+                file_name=f"merito_curricular_{codigo_arquivo}.csv",
                 mime="text/csv",
                 icon=":material/table_chart:",
                 width="stretch",

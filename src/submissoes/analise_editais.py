@@ -17,6 +17,10 @@ try:
 except ImportError:
     docx = None
 
+# Só PDF/DOCX são lidos; acima deste tamanho o arquivo é listado mas não aberto (protege a memória)
+EXTENSOES_ANALISADAS = {".pdf", ".docx"}
+MAX_BYTES_ANALISE = 100 * 1024 * 1024
+
 
 @dataclass
 class CriterioMerito:
@@ -381,11 +385,13 @@ def extrair_metadados_sigaa(doc: pymupdf.Document, identificador_padrao: str = "
 
 
 def analisar_arquivos_submissao(
-    arquivos: list[tuple[str, bytes]], identificador_padrao: str = ""
+    arquivos: list[tuple[str, bytes]], identificador_padrao: str = "", tamanhos: dict[str, int] | None = None
 ) -> ProjetoEdital:
     """Analisa um conjunto de arquivos (nome, bytes) informados pelo usuário.
     Detecta projeto principal, tarja, mérito e determina documentos faltantes.
+    `tamanhos` informa o tamanho real dos arquivos passados sem conteúdo.
     """
+    tamanhos = tamanhos or {}
     arquivos_info: list[ArquivoProcessadoInfo] = []
     sigaa_bytes: tuple[str, bytes] | None = None
     tarja_bytes: tuple[str, bytes] | None = None
@@ -395,7 +401,7 @@ def analisar_arquivos_submissao(
     # Primeiro passe: varre arquivos e identifica tipos
     for nome, conteudo in arquivos:
         ext = Path(nome).suffix.lower()
-        tamanho_kb = round(len(conteudo) / 1024, 1)
+        tamanho_kb = round(tamanhos.get(nome, len(conteudo)) / 1024, 1)
         num_paginas = 1
         texto_inicial = ""
 
@@ -573,10 +579,14 @@ def _dados_projeto_vazio(identificador_padrao: str = "") -> dict[str, Any]:
 def analisar_pasta_pvg(pvg_dir: Path) -> ProjetoEdital:
     """Compatibilidade: lê os arquivos de um diretório e chama analisar_arquivos_submissao."""
     arquivos: list[tuple[str, bytes]] = []
+    tamanhos: dict[str, int] = {}
     for f in sorted(list(pvg_dir.iterdir()), key=lambda x: x.name):
         if f.is_file():
-            arquivos.append((f.name, f.read_bytes()))
-    return analisar_arquivos_submissao(arquivos, identificador_padrao=pvg_dir.name.strip())
+            tamanho = f.stat().st_size
+            ler = f.suffix.lower() in EXTENSOES_ANALISADAS and tamanho <= MAX_BYTES_ANALISE
+            arquivos.append((f.name, f.read_bytes() if ler else b""))
+            tamanhos[f.name] = tamanho
+    return analisar_arquivos_submissao(arquivos, identificador_padrao=pvg_dir.name.strip(), tamanhos=tamanhos)
 
 
 def analisar_todos_editais(diretorio_base: str | Path) -> list[ProjetoEdital]:

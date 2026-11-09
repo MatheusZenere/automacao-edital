@@ -9,7 +9,9 @@ from pathlib import Path
 import re
 import shutil
 import tarfile
+import threading
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 import zipfile
 
 try:
@@ -233,31 +235,79 @@ def _listar_pasta(folder_id: str, pasta_destino: Path) -> list[ArquivoDrive]:
     return itens
 
 
-def _baixar_direto(file_id: str, destino: Path) -> None:
+class _Cota:
+    """Bytes que a pasta inteira ainda pode ocupar no disco (compartilhado entre as threads)."""
+
+    def __init__(self, limite: int = MAX_TOTAL_DESCOMPACTADO):
+        self._restante = limite
+        self._trava = threading.Lock()
+
+    def consumir(self, n: int) -> None:
+        with self._trava:
+            if n > self._restante:
+                raise ErroDrivePersonalizado(
+                    f"A pasta passa do limite de {MAX_TOTAL_DESCOMPACTADO // 2**20} MB no total e foi recusada. "
+                    + DICA_ZIP
+                )
+            self._restante -= n
+
+    def devolver(self, n: int) -> None:
+        with self._trava:
+            self._restante += n
+
+
+def _gravar_resposta(resp, destino: Path, cota: _Cota) -> None:
+    """Grava a resposta em streaming, respeitando o limite por arquivo e a cota da pasta."""
+    tmp = destino.with_name(destino.name + ".part")
+    recebido = 0
+    try:
+        with open(tmp, "wb") as f:
+            for bloco in resp.iter_content(chunk_size=1 << 16):
+                if recebido + len(bloco) > MAX_BYTES_ARQUIVO_DRIVE:
+                    raise ErroDrivePersonalizado(
+                        f"Um arquivo da pasta passa do limite de {MAX_BYTES_ARQUIVO_DRIVE // 2**20} MB e foi recusado."
+                    )
+                cota.consumir(len(bloco))
+                recebido += len(bloco)
+                f.write(bloco)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        cota.devolver(recebido)
+        raise
+    tmp.replace(destino)
+
+
+def _url_confirmacao(html: str) -> str:
+    """Link da página "não foi possível verificar vírus" de arquivos grandes (só domínios do Google)."""
+    from gdown.download import get_url_from_gdrive_confirmation
+
+    url = get_url_from_gdrive_confirmation(html)
+    host = urlsplit(url).hostname or ""
+    if urlsplit(url).scheme != "https" or not (host == "google.com" or host.endswith(".google.com")):
+        raise RuntimeError("Cannot retrieve the public link of the file (link de confirmação inesperado)")
+    return url
+
+
+def _baixar_direto(file_id: str, destino: Path, cota: _Cota) -> None:
     """Download direto e rápido (streaming) pelo endpoint público de download do Drive."""
     url = "https://drive.usercontent.google.com/download"
     with requests.get(
         url, params={"id": file_id, "export": "download", "confirm": "t"}, stream=True, timeout=(10, 60)
     ) as resp:
         resp.raise_for_status()
+        if "text/html" not in resp.headers.get("content-type", "").lower():
+            _gravar_resposta(resp, destino, cota)
+            return
+        html = resp.text
+    # Arquivos grandes podem cair na página de confirmação: segue o link dela, com os mesmos limites
+    with requests.get(_url_confirmacao(html), stream=True, timeout=(10, 60)) as resp:
+        resp.raise_for_status()
         if "text/html" in resp.headers.get("content-type", "").lower():
             raise RuntimeError("Cannot retrieve the public link of the file (resposta HTML)")
-        tmp = destino.with_name(destino.name + ".part")
-        with open(tmp, "wb") as f:
-            recebido = 0
-            for bloco in resp.iter_content(chunk_size=1 << 16):
-                recebido += len(bloco)
-                if recebido > MAX_BYTES_ARQUIVO_DRIVE:
-                    f.close()
-                    tmp.unlink(missing_ok=True)
-                    raise ErroDrivePersonalizado(
-                        f"Um arquivo da pasta passa do limite de {MAX_BYTES_ARQUIVO_DRIVE // 2**20} MB e foi recusado."
-                    )
-                f.write(bloco)
-    tmp.replace(destino)
+        _gravar_resposta(resp, destino, cota)
 
 
-def _baixar_arquivo(item: ArquivoDrive, tentativas: int = 3) -> None:
+def _baixar_arquivo(item: ArquivoDrive, cota: _Cota, tentativas: int = 3) -> None:
     """Baixa (ou exporta, se for nativo do Google) um arquivo, pulando se já estiver em cache."""
     nativo = EXPORTACAO_NATIVA.get(item.tipo)
     if item.tipo.startswith("application/vnd.google-apps.") and nativo is None:
@@ -269,6 +319,7 @@ def _baixar_arquivo(item: ArquivoDrive, tentativas: int = 3) -> None:
         if destino.suffix.lower() != extensao:
             destino = destino.with_name(destino.name + extensao)
     if destino.exists() and destino.stat().st_size > 0:
+        cota.consumir(destino.stat().st_size)  # o que já está em cache também ocupa o disco
         return
     destino.parent.mkdir(parents=True, exist_ok=True)
 
@@ -276,28 +327,17 @@ def _baixar_arquivo(item: ArquivoDrive, tentativas: int = 3) -> None:
     for _ in range(tentativas):
         try:
             if nativo:
-                resp = requests.get(url.format(id=item.id), timeout=60)
-                if resp.status_code != 200:
-                    raise RuntimeError(f"HTTP {resp.status_code} ao exportar o arquivo (permission denied?)")
-                if len(resp.content) > MAX_BYTES_ARQUIVO_DRIVE:
-                    raise ErroDrivePersonalizado("Um documento exportado passa do limite de tamanho e foi recusado.")
-                destino.write_bytes(resp.content)
+                with requests.get(url.format(id=item.id), stream=True, timeout=(10, 60)) as resp:
+                    if resp.status_code != 200:
+                        raise RuntimeError(f"HTTP {resp.status_code} ao exportar o arquivo (permission denied?)")
+                    _gravar_resposta(resp, destino, cota)
                 return
-            _baixar_direto(item.id, destino)
+            _baixar_direto(item.id, destino, cota)
             return
+        except ErroDrivePersonalizado:
+            raise  # limite de tamanho: tentar de novo não adianta
         except Exception as e:  # noqa: BLE001
             ultimo_erro = e
-            if nativo:
-                continue
-            # Plano B: o gdown lida com a página de confirmação de arquivos grandes
-            try:
-                resultado = gdown.download(
-                    id=item.id, output=str(destino), quiet=True, use_cookies=False, retries=1
-                )
-                if resultado and destino.exists():
-                    return
-            except Exception as e2:  # noqa: BLE001
-                ultimo_erro = e2
     raise ultimo_erro or RuntimeError("download falhou")
 
 
@@ -340,18 +380,27 @@ def baixar_pasta_drive_compartilhada(
     total = len(itens)
     feitos = 0
     primeiro_erro: Exception | None = None
+    cota = _Cota()
     if progresso:
         progresso(0, total)
     with ThreadPoolExecutor(max_workers=TRABALHADORES_DOWNLOAD) as pool:
-        futuros = [pool.submit(_baixar_arquivo, item) for item in itens]
+        futuros = [pool.submit(_baixar_arquivo, item, cota) for item in itens]
         for fut in as_completed(futuros):
+            if fut.cancelled():
+                continue
             try:
                 fut.result()
             except Exception as e:  # noqa: BLE001
                 primeiro_erro = primeiro_erro or e
+                if isinstance(e, ErroDrivePersonalizado):
+                    for f in futuros:  # passou de um limite: não baixa o resto
+                        f.cancel()
             feitos += 1
             if progresso:
                 progresso(feitos, total)
+    if isinstance(primeiro_erro, ErroDrivePersonalizado):
+        shutil.rmtree(pasta_destino, ignore_errors=True)
+        raise primeiro_erro
     if primeiro_erro is not None:
         raise ErroDrivePersonalizado(_traduzir_erro_drive(primeiro_erro)) from primeiro_erro
 

@@ -2,7 +2,7 @@
 name = "automacao-edital"
 version = "0.1.0"
 description = "Verificador Automatizado de Editais e Submissões"
-requires-python = ">=3.10"
+requires-python = ">=3.12"  # tarfile.extractall(filter="data") bloqueia path traversal
 dependencies = [
     "pydantic>=2.5",
     "pymupdf>=1.24",
