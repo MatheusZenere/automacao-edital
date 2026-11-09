@@ -94,6 +94,24 @@ def _compactar(m: re.Match | None) -> str:
     return " ".join(m.group(1).split()) if m else ""
 
 
+def _grupo(m: re.Match | None, padrao: str = "") -> str:
+    """Primeiro grupo da busca sem espaços nas pontas (`padrao` se não houve correspondência)."""
+    return m.group(1).strip() if m else padrao
+
+
+def _numero(m: re.Match | None) -> float | None:
+    """Primeiro grupo da busca como número ("12,5" vira 12.5); None se não houver."""
+    try:
+        return float(m.group(1).replace(",", ".")) if m else None
+    except ValueError:
+        return None
+
+
+def _linhas(texto: str) -> list[str]:
+    """Linhas não vazias, sem espaços nas pontas."""
+    return [l.strip() for l in texto.split("\n") if l.strip()]
+
+
 def mascarar_cpf(cpf: str) -> str:
     """Mascara o CPF para conformidade com a LGPD (ex: ***.456.789-**)."""
     cpf = cpf.strip()
@@ -106,18 +124,18 @@ def mascarar_cpf(cpf: str) -> str:
 def classificar_arquivo(nome: str, texto_inicial: str = "") -> tuple[str, str]:
     """Classifica o arquivo em categoria e descrição amigável a partir do nome e texto inicial."""
     nome_lower = nome.lower()
+    texto_upper = texto_inicial.upper()
     ext = Path(nome).suffix.lower()
 
     if ext in [".jpg", ".jpeg", ".png"]:
         return "IMAGEM", "Figura / Imagem complementar"
 
-    if "_tarja" in nome_lower or "tarja" in nome_lower:
+    if "tarja" in nome_lower:
         return "PROJETO_TARJA", "Projeto de Pesquisa (Versão Tarjada / Avaliação às Cegas)"
 
-    if any(k in nome_lower for k in ["anexo-ii", "anexo_ii", "merito", "pontua"]):
-        return "ANEXO_MERITO", "Anexo II - Formulário de Pontuação de Mérito Curricular"
-
-    if "MÉRITO CURRICULAR" in texto_inicial.upper() or "ANALISE DE MERITO" in texto_inicial.upper():
+    if any(k in nome_lower for k in ["anexo-ii", "anexo_ii", "merito", "pontua"]) or any(
+        k in texto_upper for k in ["MÉRITO CURRICULAR", "ANALISE DE MERITO"]
+    ):
         return "ANEXO_MERITO", "Anexo II - Formulário de Pontuação de Mérito Curricular"
 
     if any(k in nome_lower for k in ["certificado", "ceua", "comite"]):
@@ -126,7 +144,7 @@ def classificar_arquivo(nome: str, texto_inicial: str = "") -> tuple[str, str]:
     if any(k in nome_lower for k in ["declara", "comprovante", "endosso", "carta"]):
         return "COMPROVANTE_DECLARACAO", "Comprovante / Declaração complementar"
 
-    if "PROJETO DE PESQUISA" in texto_inicial.upper() or "DADOS DO PROJETO DE PESQUISA" in texto_inicial.upper():
+    if "PROJETO DE PESQUISA" in texto_upper:  # cobre também "DADOS DO PROJETO DE PESQUISA"
         return "PROJETO_SIGAA", "Projeto de Pesquisa (Formulário SIGAA)"
 
     if ext in [".pdf", ".docx", ".odt"]:
@@ -158,12 +176,9 @@ def extrair_criterios_anexo_ii_stream(nome: str, conteudo: bytes) -> tuple[float
                             )
                         )
                     elif len(cells) >= 2 and "TOTAL" in cells[0].upper():
-                        m = re.search(r"(\d+[\.,]?\d*)", " ".join(cells))
-                        if m:
-                            try:
-                                total = float(m.group(1).replace(",", "."))
-                            except ValueError:
-                                pass
+                        valor = _numero(re.search(r"(\d+[\.,]?\d*)", " ".join(cells)))
+                        if valor is not None:
+                            total = valor
         except Exception:
             pass
         return total, criterios
@@ -173,14 +188,9 @@ def extrair_criterios_anexo_ii_stream(nome: str, conteudo: bytes) -> tuple[float
             doc = pymupdf.open(stream=conteudo, filetype="pdf")
             texto = _texto_pdf(doc)
 
-            m_tot = re.search(r"TOTAL\s*[:\|]?\s*(\d+[\.,]?\d*)", texto, re.I)
-            if m_tot:
-                try:
-                    total = float(m_tot.group(1).replace(",", "."))
-                except ValueError:
-                    pass
+            total = _numero(re.search(r"TOTAL\s*[:\|]?\s*(\d+[\.,]?\d*)", texto, re.I))
 
-            lines = [l.strip() for l in texto.split("\n") if l.strip()]
+            lines = _linhas(texto)
             i = 0
             while i < len(lines):
                 if lines[i].isdigit() and 1 <= int(lines[i]) <= 13:
@@ -237,59 +247,44 @@ def extrair_metadados_sigaa(doc: pymupdf.Document, identificador_padrao: str = "
         titulo = _compactar(re.search(r"Título:\s*(.*?)(?=\n(?:Resumo|Introdução|\d+\.))", texto, re.S | re.I))
 
     # Edital
-    m_edital = re.search(r"Edital:\s*(.*?)(?=\n(?:Cota|Objetivos|Área))", texto, re.S | re.I)
-    edital = _compactar(m_edital) or "Não especificado"
+    edital = _compactar(re.search(r"Edital:\s*(.*?)(?=\n(?:Cota|Objetivos|Área))", texto, re.S | re.I)) or "Não especificado"
 
     # Cota / Vigência
-    m_cota = re.search(r"Cota:\s*(.*?)(?=\n(?:Objetivos|Área|Grande Área))", texto, re.S | re.I)
-    cota = _compactar(m_cota)
+    cota = _compactar(re.search(r"Cota:\s*(.*?)(?=\n(?:Objetivos|Área|Grande Área))", texto, re.S | re.I))
 
     # Área de conhecimento
-    m_garea = re.search(r"Grande Área:\s*(.*?)(?=\n(?:Área:|Subárea:))", texto, re.I)
-    grande_area = m_garea.group(1).strip() if m_garea else ""
-
-    m_area = re.search(r"Área:\s*(.*?)(?=\n(?:Subárea:|Especialidade:|Grupo))", texto, re.I)
-    area = m_area.group(1).strip() if m_area else ""
-
-    m_subarea = re.search(r"Subárea:\s*(.*?)(?=\n(?:Especialidade:|Grupo))", texto, re.I)
-    subarea = m_subarea.group(1).strip() if m_subarea else ""
+    grande_area = _grupo(re.search(r"Grande Área:\s*(.*?)(?=\n(?:Área:|Subárea:))", texto, re.I))
+    area = _grupo(re.search(r"Área:\s*(.*?)(?=\n(?:Subárea:|Especialidade:|Grupo))", texto, re.I))
+    subarea = _grupo(re.search(r"Subárea:\s*(.*?)(?=\n(?:Especialidade:|Grupo))", texto, re.I))
 
     # E-mail
-    m_email = re.search(r"E-mail:\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})", texto, re.I)
-    email = m_email.group(1).strip() if m_email else ""
+    email = _grupo(re.search(r"E-mail:\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})", texto, re.I))
 
     # Situação
-    m_sit = re.search(r"Situação do Projeto:\s*(.*?)(?=\n|$)", texto, re.I)
-    situacao = m_sit.group(1).strip() if m_sit else "SUBMETIDO"
+    situacao = _grupo(re.search(r"Situação do Projeto:\s*(.*?)(?=\n|$)", texto, re.I), "SUBMETIDO")
 
     # Comitê de ética
-    m_etica = re.search(r"N° Protocolo:\s*(.*?)(?=\n(?:Corpo do Projeto|Resumo))", texto, re.I)
-    comite_etica = m_etica.group(1).strip() if m_etica else "Não informado / Isento"
+    comite_etica = _grupo(
+        re.search(r"N° Protocolo:\s*(.*?)(?=\n(?:Corpo do Projeto|Resumo))", texto, re.I), "Não informado / Isento"
+    )
 
     # Seções de texto
-    m_res = re.search(r"Resumo\s*(.*?)(?=\n(?:Palavras-chave|Introdução))", texto, re.S | re.I)
-    resumo = _compactar(m_res)
-
-    m_intro = re.search(
+    resumo = _compactar(re.search(r"Resumo\s*(.*?)(?=\n(?:Palavras-chave|Introdução))", texto, re.S | re.I))
+    introducao = _compactar(re.search(
         r"Introdução.*?\n(.*?)(?=\n(?:Procedimentos Metodológicos|Metodologia|Resultados))",
         texto,
         re.S | re.I,
-    )
-    introducao = _compactar(m_intro)
-
-    m_metod = re.search(
+    ))
+    metodologia = _compactar(re.search(
         r"(?:Procedimentos Metodológicos|Metodologia).*?\n(.*?)(?=\n(?:Resultados Esperados|Referências|Cronograma))",
         texto,
         re.S | re.I,
-    )
-    metodologia = _compactar(m_metod)
-
-    m_result = re.search(
+    ))
+    resultados = _compactar(re.search(
         r"Resultados Esperados.*?\n(.*?)(?=\n(?:Referências|Membros do Projeto|Cronograma))",
         texto,
         re.S | re.I,
-    )
-    resultados = _compactar(m_result)
+    ))
 
     # Membros da equipe
     membros: list[MembroProjeto] = []
@@ -301,7 +296,7 @@ def extrair_metadados_sigaa(doc: pymupdf.Document, identificador_padrao: str = "
         re.S | re.I,
     )
     if bloco_membros:
-        linhas = [l.strip() for l in bloco_membros.group(0).split("\n") if l.strip()]
+        linhas = _linhas(bloco_membros.group(0))
         idx = 0
         while idx < len(linhas):
             linha = linhas[idx]
@@ -334,9 +329,7 @@ def extrair_metadados_sigaa(doc: pymupdf.Document, identificador_padrao: str = "
 
     # Fallbacks para o Coordenador
     if not coordenador:
-        m_coord = re.search(r"Coordenador do Projeto:\s*(.*?)(?=\n|$)", texto, re.I)
-        if m_coord:
-            coordenador = m_coord.group(1).strip()
+        coordenador = _grupo(re.search(r"Coordenador do Projeto:\s*(.*?)(?=\n|$)", texto, re.I))
 
     if not coordenador:
         m_hist = re.search(
@@ -357,8 +350,7 @@ def extrair_metadados_sigaa(doc: pymupdf.Document, identificador_padrao: str = "
         re.S | re.I,
     )
     if bloco_crono:
-        linhas_crono = [l.strip() for l in bloco_crono.group(0).split("\n") if l.strip()]
-        for l in linhas_crono:
+        for l in _linhas(bloco_crono.group(0)):
             if len(l) > 15 and not any(k in l.upper() for k in ["CRONOGRAMA", "ATIVIDADE", "2026", "MAR", "ABR", "HISTÓRICO"]):
                 if not l.startswith("X") and not l.startswith(" "):
                     cronograma.append({"atividade": l})
@@ -481,36 +473,26 @@ def analisar_arquivos_submissao(
             if m_c:
                 dados_projeto["coordenador"] = m_c.group(1).replace("_", " ").title()
 
-    # Validação e Checagem de Documentos Faltantes
-    tem_sigaa = sigaa_bytes is not None
-    tem_tarja = tarja_bytes is not None
-    tem_anexo_ii = anexo_ii_bytes is not None
-
-    documentos_faltantes: list[str] = []
-    documentos_entregues: list[str] = []
-
-    if tem_sigaa:
-        documentos_entregues.append(f"Projeto de Pesquisa Principal (SIGAA): {sigaa_bytes[0]}")
-    else:
-        documentos_faltantes.append(
-            "Projeto de Pesquisa Principal (Formulário SIGAA contendo dados da proposta, objetivos, equipe e cronograma)"
-        )
-
-    if tem_tarja:
-        documentos_entregues.append(f"Versão Tarjada do Projeto (Avaliação às Cegas): {tarja_bytes[0]}")
-    else:
-        documentos_faltantes.append(
-            "Versão Tarjada do Projeto (Exigência para avaliação às cegas - sem identificação dos autores)"
-        )
-
-    if tem_anexo_ii:
-        documentos_entregues.append(
-            f"Anexo II - Formulário de Pontuação de Mérito Curricular: {anexo_ii_nome}"
-        )
-    else:
-        documentos_faltantes.append(
-            "Anexo II (Formulário de Pontuação de Mérito Curricular / Lattes preenchido)"
-        )
+    # Validação e Checagem de Documentos Faltantes: (arquivo, texto se entregue, texto se faltar)
+    obrigatorios = [
+        (
+            sigaa_bytes,
+            "Projeto de Pesquisa Principal (SIGAA)",
+            "Projeto de Pesquisa Principal (Formulário SIGAA contendo dados da proposta, objetivos, equipe e cronograma)",
+        ),
+        (
+            tarja_bytes,
+            "Versão Tarjada do Projeto (Avaliação às Cegas)",
+            "Versão Tarjada do Projeto (Exigência para avaliação às cegas - sem identificação dos autores)",
+        ),
+        (
+            anexo_ii_bytes,
+            "Anexo II - Formulário de Pontuação de Mérito Curricular",
+            "Anexo II (Formulário de Pontuação de Mérito Curricular / Lattes preenchido)",
+        ),
+    ]
+    documentos_entregues = [f"{entregue}: {arq[0]}" for arq, entregue, _ in obrigatorios if arq]
+    documentos_faltantes = [faltando for arq, _, faltando in obrigatorios if not arq]
 
     if tem_comprovantes:
         documentos_entregues.append("Comprovantes / Declarações / Certificado de Ética anexados")
@@ -520,35 +502,20 @@ def analisar_arquivos_submissao(
     else:
         status_conf = f"Incompleto (Faltam {len(documentos_faltantes)} documento(s))"
 
+    # As chaves de dados_projeto têm os mesmos nomes dos campos de ProjetoEdital
     return ProjetoEdital(
         pasta=identificador_padrao or dados_projeto["codigo"],
-        codigo=dados_projeto["codigo"],
-        titulo=dados_projeto["titulo"],
-        edital=dados_projeto["edital"],
-        coordenador=dados_projeto["coordenador"],
-        email_coordenador=dados_projeto["email_coordenador"],
-        situacao=dados_projeto["situacao"],
-        cota_vigencia=dados_projeto["cota_vigencia"],
-        grande_area=dados_projeto["grande_area"],
-        area=dados_projeto["area"],
-        subarea=dados_projeto["subarea"],
-        comite_etica=dados_projeto["comite_etica"],
-        resumo=dados_projeto["resumo"],
-        introducao=dados_projeto["introducao"],
-        metodologia=dados_projeto["metodologia"],
-        resultados_esperados=dados_projeto["resultados_esperados"],
+        **dados_projeto,
         pontuacao_merito=pontuacao_merito,
         anexo_ii_nome=anexo_ii_nome,
-        tem_projeto_sigaa=tem_sigaa,
-        tem_versao_tarja=tem_tarja,
-        tem_anexo_merito=tem_anexo_ii,
+        tem_projeto_sigaa=sigaa_bytes is not None,
+        tem_versao_tarja=tarja_bytes is not None,
+        tem_anexo_merito=anexo_ii_bytes is not None,
         tem_comprovantes=tem_comprovantes,
         status_conformidade=status_conf,
         total_arquivos=len(arquivos_info),
         documentos_faltantes=documentos_faltantes,
         documentos_entregues=documentos_entregues,
-        membros=dados_projeto["membros"],
-        cronograma=dados_projeto["cronograma"],
         criterios_merito=criterios_merito,
         arquivos=arquivos_info,
     )
@@ -606,6 +573,16 @@ def analisar_todos_editais(diretorio_base: str | Path) -> list[ProjetoEdital]:
     return projetos
 
 
+def _linha_membro(m: MembroProjeto) -> dict[str, str]:
+    return {
+        "Nome": m.nome,
+        "Categoria": m.categoria,
+        "Carga Horária": m.ch_dedicada,
+        "Participação": m.tipo_participacao,
+        "CPF (LGPD)": m.cpf_mascarado,
+    }
+
+
 def gerar_dataframe_submissao(projeto: ProjetoEdital) -> dict[str, pd.DataFrame]:
     """Gera DataFrames consolidados para exportação CSV de uma submissão individual."""
     # 1. Resumo da Submissão (Metadados + Conformidade)
@@ -656,18 +633,7 @@ def gerar_dataframe_submissao(projeto: ProjetoEdital) -> dict[str, pd.DataFrame]
     )
 
     # 3. Equipe
-    df_equipe = pd.DataFrame(
-        [
-            {
-                "Nome": m.nome,
-                "Categoria": m.categoria,
-                "Carga Horária": m.ch_dedicada,
-                "Participação": m.tipo_participacao,
-                "CPF (LGPD)": m.cpf_mascarado,
-            }
-            for m in projeto.membros
-        ]
-    )
+    df_equipe = pd.DataFrame([_linha_membro(m) for m in projeto.membros])
 
     # 4. Critérios de Mérito
     df_merito = pd.DataFrame(
@@ -734,17 +700,7 @@ def gerar_dataframes(projetos: list[ProjetoEdital]) -> dict[str, pd.DataFrame]:
     linhas_membros = []
     for p in projetos:
         for m in p.membros:
-            linhas_membros.append(
-                {
-                    "Código": p.codigo,
-                    "Título Projeto": p.titulo,
-                    "Nome": m.nome,
-                    "Categoria": m.categoria,
-                    "Carga Horária": m.ch_dedicada,
-                    "Participação": m.tipo_participacao,
-                    "CPF (LGPD)": m.cpf_mascarado,
-                }
-            )
+            linhas_membros.append({"Código": p.codigo, "Título Projeto": p.titulo, **_linha_membro(m)})
     df_membros = pd.DataFrame(linhas_membros)
 
     return {

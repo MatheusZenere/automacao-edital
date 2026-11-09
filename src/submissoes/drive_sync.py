@@ -30,6 +30,8 @@ MAX_TOTAL_DESCOMPACTADO = 1024 * 1024 * 1024  # 1 GB descompactado (anti zip-bom
 MAX_ARQUIVOS = 2000
 MAX_BYTES_ARQUIVO_DRIVE = 100 * 1024 * 1024  # 100 MB por arquivo baixado do Drive
 
+EXTENSOES_COMPACTADAS = (".zip", ".tar.gz", ".tar", ".tgz")
+
 
 class ErroDrivePersonalizado(Exception):
     """Exceção base com mensagem amigável em português para o usuário."""
@@ -78,6 +80,11 @@ def detectar_raiz_submissoes(pasta: Path) -> Path:
     return pasta
 
 
+def _tem_documentos(pasta: Path) -> bool:
+    """Há ao menos um arquivo visível (com extensão) em qualquer nível da pasta."""
+    return any(f.is_file() and not f.name.startswith(".") for f in pasta.glob("**/*.*"))
+
+
 def _checar_limites(qtd_arquivos: int, total_bytes: int) -> None:
     if qtd_arquivos > MAX_ARQUIVOS or total_bytes > MAX_TOTAL_DESCOMPACTADO:
         raise ErroDrivePersonalizado(
@@ -94,7 +101,7 @@ def extrair_zip_submissoes(conteudo_zip: bytes, pasta_destino: Path, nome_arquiv
     if not conteudo_zip:
         raise ErroDrivePersonalizado("O arquivo compactado enviado está vazio (0 bytes).")
 
-    if nome_arquivo and not nome_arquivo.lower().endswith((".zip", ".tar.gz", ".tar", ".tgz")):
+    if nome_arquivo and not nome_arquivo.lower().endswith(EXTENSOES_COMPACTADAS):
         extensao = Path(nome_arquivo).suffix or "desconhecida"
         raise ErroDrivePersonalizado(
             f"Formato não permitido ({extensao})! O sistema aceita exclusivamente arquivos compactados (.zip). "
@@ -144,9 +151,7 @@ def extrair_zip_submissoes(conteudo_zip: bytes, pasta_destino: Path, nome_arquiv
 
     pasta_raiz = detectar_raiz_submissoes(pasta_destino)
 
-    # Verifica se realmente há arquivos
-    arquivos_encontrados = list(pasta_raiz.glob("**/*.*"))
-    if not arquivos_encontrados:
+    if not _tem_documentos(pasta_raiz):
         raise ErroDrivePersonalizado(
             "O arquivo compactado foi descompactado com sucesso, mas não contém documentos. "
             "Verifique se você compactou a pasta correta com os editais e anexos."
@@ -288,6 +293,10 @@ def _url_confirmacao(html: str) -> str:
     return url
 
 
+def _eh_html(resp) -> bool:
+    return "text/html" in resp.headers.get("content-type", "").lower()
+
+
 def _baixar_direto(file_id: str, destino: Path, cota: _Cota) -> None:
     """Download direto e rápido (streaming) pelo endpoint público de download do Drive."""
     url = "https://drive.usercontent.google.com/download"
@@ -295,14 +304,14 @@ def _baixar_direto(file_id: str, destino: Path, cota: _Cota) -> None:
         url, params={"id": file_id, "export": "download", "confirm": "t"}, stream=True, timeout=(10, 60)
     ) as resp:
         resp.raise_for_status()
-        if "text/html" not in resp.headers.get("content-type", "").lower():
+        if not _eh_html(resp):
             _gravar_resposta(resp, destino, cota)
             return
         html = resp.text
     # Arquivos grandes podem cair na página de confirmação: segue o link dela, com os mesmos limites
     with requests.get(_url_confirmacao(html), stream=True, timeout=(10, 60)) as resp:
         resp.raise_for_status()
-        if "text/html" in resp.headers.get("content-type", "").lower():
+        if _eh_html(resp):
             raise RuntimeError("Cannot retrieve the public link of the file (resposta HTML)")
         _gravar_resposta(resp, destino, cota)
 
@@ -405,9 +414,7 @@ def baixar_pasta_drive_compartilhada(
         raise ErroDrivePersonalizado(_traduzir_erro_drive(primeiro_erro)) from primeiro_erro
 
     pasta_raiz = detectar_raiz_submissoes(pasta_destino)
-    arquivos_baixados = [f for f in pasta_raiz.glob("**/*.*") if f.is_file() and not f.name.startswith(".")]
-
-    if not arquivos_baixados:
+    if not _tem_documentos(pasta_raiz):
         raise ErroDrivePersonalizado(
             "Conseguimos abrir a pasta, mas nenhum documento veio junto. A pasta pode estar vazia "
             "ou os arquivos dentro dela não estão compartilhados. " + DICA_ZIP

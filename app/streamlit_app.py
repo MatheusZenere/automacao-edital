@@ -41,6 +41,7 @@ from src.edital.estrutura import (
     TEMA_SUBMISSAO,
     EditalEstruturado,
     ItemEdital,
+    SecaoEdital,
     analisar_edital,
     encontrar_edital,
 )
@@ -134,6 +135,21 @@ def markdown_item(item: ItemEdital) -> str:
     if item.numero:
         linhas[0] = f"**{esc(item.numero)}** {linhas[0]}"
     return "  \n".join(linhas)
+
+
+def mostrar_itens(secao: SecaoEdital) -> None:
+    for item in secao.itens:
+        st.markdown(markdown_item(item))
+
+
+def linha_meta(rotulo: str, valor, vazio: str = "") -> None:
+    """Metadado do projeto em uma linha, com `vazio` quando não informado."""
+    st.write(f"**{rotulo}:** {esc(valor) or vazio}")
+
+
+def botao_csv(rotulo: str, df: pd.DataFrame, arquivo: str, icon: str = ":material/download:", **kwargs) -> None:
+    """Botão que baixa a tabela em CSV protegido contra injeção de fórmulas."""
+    st.download_button(rotulo, data=csv_seguro(df), file_name=arquivo, mime="text/csv", icon=icon, **kwargs)
 
 
 # --- CABEÇALHO ---
@@ -384,8 +400,7 @@ with col_main:
                 st.info("Nenhuma seção sobre submissão ou inscrição foi encontrada.")
             for secao in secoes_sub:
                 st.markdown(f"##### {secao.numero} {esc(secao.titulo)}")
-                for item in secao.itens:
-                    st.markdown(markdown_item(item))
+                mostrar_itens(secao)
         with aba_req:
             secoes_req = edital.secoes_do_tema(TEMA_REQUISITOS)
             if not secoes_req:
@@ -400,8 +415,7 @@ with col_main:
         with aba_tudo:
             for secao in edital.secoes:
                 with st.expander(f"{secao.numero} {esc(secao.titulo)}"):
-                    for item in secao.itens:
-                        st.markdown(markdown_item(item))
+                    mostrar_itens(secao)
         st.stop()
 
     if not todos_projetos:
@@ -457,13 +471,7 @@ with col_main:
         ):
             df_conf = tabela_conformidade(conformidade)
             st.dataframe(df_conf, hide_index=True, alt="Conferência das submissões com o edital")
-            st.download_button(
-                "Baixar conferência com o edital (CSV)",
-                data=csv_seguro(df_conf),
-                file_name="conferencia_edital.csv",
-                mime="text/csv",
-                icon=":material/download:",
-            )
+            botao_csv("Baixar conferência com o edital (CSV)", df_conf, "conferencia_edital.csv")
         if not faltando:
             st.success(
                 f"Todos os documentos exigidos na submissão pelo Edital {esc(edital.numero)} foram encontrados "
@@ -489,36 +497,28 @@ with col_main:
     codigo_arquivo = re.sub(r"[^\w.-]", "_", proj_sel.codigo)
 
     with col_dl1:
-        csv_detalhes = csv_seguro(df_detalhes)
-        st.download_button(
-            label=f"Baixar Relatório do Projeto ({esc(proj_sel.codigo)}) em CSV",
-            data=csv_detalhes,
-            file_name=f"relatorio_edital_{codigo_arquivo}.csv",
-            mime="text/csv",
-            icon=":material/download:",
+        botao_csv(
+            f"Baixar Relatório do Projeto ({esc(proj_sel.codigo)}) em CSV",
+            df_detalhes,
+            f"relatorio_edital_{codigo_arquivo}.csv",
             width="stretch",
         )
 
     with col_dl2:
         if not df_merito.empty:
-            csv_merito = csv_seguro(df_merito)
-            st.download_button(
-                label="Baixar Mérito Curricular (CSV)",
-                data=csv_merito,
-                file_name=f"merito_curricular_{codigo_arquivo}.csv",
-                mime="text/csv",
+            botao_csv(
+                "Baixar Mérito Curricular (CSV)",
+                df_merito,
+                f"merito_curricular_{codigo_arquivo}.csv",
                 icon=":material/table_chart:",
                 width="stretch",
             )
 
     with col_dl3:
-        dfs_todos = gerar_dataframes(todos_projetos)
-        csv_todos = csv_seguro(dfs_todos["resumo"])
-        st.download_button(
-            label=f"Baixar Resumo de Todos ({len(todos_projetos)}) em CSV",
-            data=csv_todos,
-            file_name="resumo_geral_submissoes_drive.csv",
-            mime="text/csv",
+        botao_csv(
+            f"Baixar Resumo de Todos ({len(todos_projetos)}) em CSV",
+            gerar_dataframes(todos_projetos)["resumo"],
+            "resumo_geral_submissoes_drive.csv",
             icon=":material/dataset:",
             width="stretch",
             help="Baixa a planilha com o resumo de todas as submissões encontradas no Drive.",
@@ -536,16 +536,16 @@ with col_main:
 
     col_meta1, col_meta2, col_meta3 = st.columns(3)
     with col_meta1:
-        st.write(f"**Coordenador(a):** {esc(proj_sel.coordenador)}")
-        st.write(f"**E-mail:** {esc(proj_sel.email_coordenador) or 'Não informado'}")
-        st.write(f"**Edital:** {esc(proj_sel.edital)}")
+        linha_meta("Coordenador(a)", proj_sel.coordenador)
+        linha_meta("E-mail", proj_sel.email_coordenador, "Não informado")
+        linha_meta("Edital", proj_sel.edital)
     with col_meta2:
-        st.write(f"**Grande Área:** {esc(proj_sel.grande_area) or 'Não especificada'}")
-        st.write(f"**Área:** {esc(proj_sel.area) or 'Não especificada'}")
-        st.write(f"**Subárea:** {esc(proj_sel.subarea) or 'Não especificada'}")
+        linha_meta("Grande Área", proj_sel.grande_area, "Não especificada")
+        linha_meta("Área", proj_sel.area, "Não especificada")
+        linha_meta("Subárea", proj_sel.subarea, "Não especificada")
     with col_meta3:
-        st.write(f"**Vigência / Cota:** {esc(proj_sel.cota_vigencia) or 'Padrão do Edital'}")
-        st.write(f"**Comitê de Ética:** {esc(proj_sel.comite_etica)}")
+        linha_meta("Vigência / Cota", proj_sel.cota_vigencia, "Padrão do Edital")
+        linha_meta("Comitê de Ética", proj_sel.comite_etica)
         st.write(
             f"**Pontuação de Mérito:** {proj_sel.pontuacao_merito if proj_sel.pontuacao_merito is not None else 'Pendente (Não informado)'}"
         )
